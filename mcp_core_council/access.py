@@ -1,10 +1,9 @@
 """Access to MCP-core from the caller's machine: where the server is and which token to send.
 
-A token comes from MCP_AUTH_TOKEN, else from the access file this module writes after
-`mcp-core-council request` and `mcp-core-council status`:
-$XDG_CONFIG_HOME/mcp-core/council-access.json (MCP_COUNCIL_ACCESS_FILE overrides). The
-file holds the server URL, the request id and its claim code while the request is pending,
-then the token. Only the name, the email and the note of a request ever reach the server.
+A token comes from MCP_AUTH_TOKEN, else from the access file `mcp-core-council login` writes:
+$XDG_CONFIG_HOME/mcp-core/council-access.json (MCP_COUNCIL_ACCESS_FILE overrides), holding
+the server URL and the token. `mcp-core-council request` sends a name, an email and a note;
+the server mails the token to that email.
 
 Standard library only: runs on macOS, Linux and Windows.
 """
@@ -107,34 +106,30 @@ def _post(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def request_access(name: str, email: str, note: str = "", url: Optional[str] = None) -> Dict[str, Any]:
-    """Send a request and keep its claim code; the token comes later, through check_status."""
+    """Send a request. The token never comes back here: the server mails it to `email`."""
     url = url or remote_url()
     reply = _post(access_base(url) + "/request", {"name": name, "email": email, "note": note})
-    if not reply.get("request_id") or not reply.get("claim_code"):
+    if reply.get("status") not in ("sent", "pending"):
         raise AccessError("unexpected reply: %s" % json.dumps(reply)[:200])
-    save_access({"url": url, "status": "pending", "request_id": reply["request_id"],
-                 "claim_code": reply["claim_code"], "email": email})
     return reply
 
 
-def check_status() -> Dict[str, Any]:
-    """Ask the server about the saved request. An approved request returns its token once: it is
-    saved here and the claim code dropped. Returns the access record as saved."""
-    saved = load_access()
-    if saved.get("token") and not saved.get("claim_code"):
-        return saved
-    if not saved.get("request_id") or not saved.get("claim_code"):
-        raise AccessError("no request saved in %s: run `mcp-core-council request` first" % access_path())
-    url = str(saved.get("url") or remote_url())
-    reply = _post(access_base(url) + "/claim", {"request_id": saved["request_id"], "claim_code": saved["claim_code"]})
-    status = reply.get("status")
-    if status == "approved" and reply.get("token"):
-        saved = {"url": url, "status": "active", "request_id": saved["request_id"], "label": reply.get("label"),
-                 "token": reply["token"], "expires_at": reply.get("expires_at"), "email": saved.get("email")}
-        save_access(saved)
-        return saved
-    if status in ("pending", "denied", "expired", "claimed"):
-        saved["status"] = status
-        save_access(saved)
-        return saved
-    raise AccessError("unexpected reply: %s" % json.dumps(reply)[:200])
+def login(token: str, url: Optional[str] = None) -> Dict[str, Any]:
+    """Check the token against the server, then save it for the runner."""
+    token = token.strip()
+    url = url or remote_url()
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode("utf-8")
+    headers = {"content-type": "application/json", "accept": "application/json, text/event-stream",
+               "Authorization": "Bearer " + token}
+    try:
+        with urlopen(Request(url, data=body, headers=headers, method="POST"), timeout=30) as response:
+            response.read()
+    except HTTPError as error:
+        if error.code == 401:
+            raise AccessError("the server does not accept this token (mistyped, expired or revoked)")
+        raise AccessError("HTTP %s from %s" % (error.code, url))
+    except URLError as error:
+        raise AccessError("server unavailable: %s" % error.reason)
+    saved = {"url": url, "token": token}
+    save_access(saved)
+    return saved

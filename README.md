@@ -6,7 +6,7 @@ Client của **MCP-core council**. Khi bạn làm việc trong Claude Code hoặ
 - **Server MCP-core không bao giờ nhận nội dung của bạn**, gồm câu hỏi, ngữ cảnh và câu trả lời. Server chỉ gửi xuống vai trò của từng ghế, rồi nhận lại các con số: số ghế, tên model, số token, độ dài câu trả lời.
 - Kết quả luôn ghi `verified: false`. Đó là ý kiến tham khảo, không phải kiểm chứng độc lập.
 
-*English: a stdio MCP server that runs review-council seats on your own CLI subscriptions. The MCP-core server only plans the roles and records metadata; it never receives your question, context or answers. Access needs a token: request one with `mcp-core-council request`.*
+*English: a stdio MCP server that runs review-council seats on your own CLI subscriptions. The MCP-core server only plans the roles and records metadata; it never receives your question, context or answers. Access needs a token: request one with `mcp-core-council request` (it arrives by email), then `mcp-core-council login <token>`.*
 
 ## Cần có
 
@@ -22,23 +22,23 @@ Trong các lệnh dưới đây, `COUNCIL` là viết tắt của:
 uvx --from git+https://github.com/focalwellos/mcp-core-council mcp-core-council
 ```
 
-## 1. Xin quyền dùng
+## 1. Xin token
+
+Điền tên và email tại <https://35-253-26-216.sslip.io/access>, hoặc chạy:
 
 ```
 COUNCIL request --name "Tên của bạn" --email ban@example.com --note "Dùng để phản biện kế hoạch dự án"
 ```
 
-Yêu cầu được người quản lý duyệt bằng tay. Mã yêu cầu được lưu trong `~/.config/mcp-core/council-access.json`. Trên Windows, file nằm ở `%USERPROFILE%\.config\mcp-core\`. Đừng chia sẻ file này cho ai.
+Token được gửi tới email của bạn sau vài giây. Hãy kiểm tra cả mục spam. Mỗi token có hạn dùng, ngày hết hạn ghi trong email. Nếu mất token hoặc token hết hạn, bạn gửi yêu cầu lại; token mới sẽ thay token cũ.
 
-Bạn cũng có thể xin quyền trên trình duyệt tại <https://35-253-26-216.sslip.io/access>.
-
-## 2. Nhận token
+## 2. Lưu token trên máy
 
 ```
-COUNCIL status
+COUNCIL login <token trong email>
 ```
 
-Khi được duyệt, lệnh này nhận token và lưu vào file trên, bạn không cần chép tay. Token chỉ được trao **một lần**. Nếu mất token, hãy xin lại. Mỗi token có hạn dùng; hết hạn thì gửi yêu cầu mới bằng `request --force`.
+Lệnh này kiểm tra token với server, rồi lưu vào `~/.config/mcp-core/council-access.json`. Trên Windows, file nằm ở `%USERPROFILE%\.config\mcp-core\`. Đừng chia sẻ file này cho ai.
 
 ## 3. Khai báo các ghế
 
@@ -79,7 +79,8 @@ Mỗi ghế là một lần gọi model bằng gói thuê bao của bạn, nên 
 
 ## Gặp lỗi
 
-- `no valid access token`: chưa có token, token hết hạn hoặc đã bị thu hồi. Chạy `COUNCIL status`, hoặc `COUNCIL request --force`.
+- `no valid access token`: chưa có token, token hết hạn hoặc đã bị thu hồi. Gửi yêu cầu lại (bước 1) rồi `COUNCIL login` với token mới.
+- Không thấy email: kiểm tra mục spam. Mỗi email chỉ được xin 3 lần mỗi ngày.
 - `claude not found on PATH`: CLI chưa cài, hoặc chưa có trong PATH của phiên Claude Code.
 - `daily cap reached`: đã dùng hết 100 vòng trong ngày (tính theo giờ UTC).
 - Trên **Windows**, bản này chưa được thử trên máy thật. Bạn gặp lỗi gì, xin gửi lại nguyên văn thông báo lỗi.
@@ -89,6 +90,6 @@ Mỗi ghế là một lần gọi model bằng gói thuê bao của bạn, nên 
 | Biến môi trường | Ý nghĩa |
 |---|---|
 | `MCP_REMOTE_URL` | Server khác với server công khai mặc định |
-| `MCP_AUTH_TOKEN` | Token do người quản lý gửi trực tiếp (dùng thay cho file access) |
+| `MCP_AUTH_TOKEN` | Token dùng thay cho file access |
 | `MCP_COUNCIL_LOCAL_CONFIG` | Đường dẫn khác cho `council-local.json` |
 | `MCP_COUNCIL_ACCESS_FILE` | Đường dẫn khác cho `council-access.json` |

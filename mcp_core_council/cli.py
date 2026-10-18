@@ -1,8 +1,8 @@
 """`mcp-core-council`: the one command a caller installs.
 
     mcp-core-council                 the MCP stdio server (what Claude Code / Codex launch)
-    mcp-core-council request ...     ask the server owner for an access token
-    mcp-core-council status          check the request; once approved, save the token
+    mcp-core-council request ...     ask for an access token; it arrives by email
+    mcp-core-council login TOKEN     check the token from the email and save it
     mcp-core-council init            write council-local.json from the CLIs found on PATH
 
 Standard library only: runs on macOS, Linux and Windows.
@@ -31,31 +31,20 @@ MANUAL_CLIS = {"codex": '{"label": "codex:<model>", "cli": "codex", "model": "<m
 
 
 def cmd_request(args: argparse.Namespace) -> int:
-    saved = access.load_access()
-    if saved.get("status") in ("pending", "active") and not args.force:
-        print("A request is already %s (id %s). Run `mcp-core-council status`, or add --force to "
-              "send a new one (it replaces the saved token)." % (saved["status"], saved.get("request_id")))
-        return 1
     reply = access.request_access(args.name, args.email, args.note or "", args.url)
-    print("Request sent (id %s). The owner reviews it by hand." % reply["request_id"])
-    print("Check it later with: mcp-core-council status")
-    print("Saved in %s; keep that file private." % access.access_path())
+    if reply["status"] == "sent":
+        print("Token sent to %s. Check your inbox (and spam), then run:" % reply["email"])
+    else:
+        print("Request received. Once approved, the token is mailed to %s. Then run:" % reply["email"])
+    print("  mcp-core-council login <token>")
     return 0
 
 
-def cmd_status(_args: argparse.Namespace) -> int:
-    saved = access.check_status()
-    status = saved.get("status")
-    if status == "active":
-        print("Access active: %s, expires %s." % (saved.get("label"), saved.get("expires_at") or "never"))
-        print("Token saved in %s; the council uses it on its own." % access.access_path())
-        return 0
-    messages = {"pending": "Still pending: the owner has not reviewed it yet.",
-                "denied": "The request was declined.",
-                "expired": "The request expired before review. Send a new one with --force.",
-                "claimed": "This request's token was already collected. Ask the owner for a new one."}
-    print(messages.get(str(status), "Status: %s" % status))
-    return 0 if status == "pending" else 1
+def cmd_login(args: argparse.Namespace) -> int:
+    saved = access.login(args.token, args.url)
+    print("Token accepted by %s and saved in %s." % (saved["url"], access.access_path()))
+    print("Next: mcp-core-council init")
+    return 0
 
 
 def default_config(found: Dict[str, Optional[str]]) -> Dict[str, Any]:
@@ -86,7 +75,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     print("\nRegister with Claude Code (once, for every project):")
     print("  claude mcp add council-local -s user -- " + INSTALL)
     if not access.auth_token():
-        print("\nNo access token yet: run `mcp-core-council request --name ... --email ...`.")
+        print("\nNo access token yet: run `mcp-core-council request --name ... --email ...`,")
+        print("then `mcp-core-council login <token>` with the token from the email.")
     return 0
 
 
@@ -103,9 +93,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     request.add_argument("--email", required=True)
     request.add_argument("--note", default="", help="what you will use it for (optional)")
     request.add_argument("--url", default=None, help="server URL (default: the public instance)")
-    request.add_argument("--force", action="store_true", help="send a new request even if one is pending")
     request.set_defaults(run=cmd_request)
-    sub.add_parser("status", help="check the request and save the token once approved").set_defaults(run=cmd_status)
+    login = sub.add_parser("login", help="check the token from the email and save it")
+    login.add_argument("token")
+    login.add_argument("--url", default=None, help="server URL (default: the public instance)")
+    login.set_defaults(run=cmd_login)
     init = sub.add_parser("init", help="write council-local.json from the CLIs on PATH")
     init.add_argument("--force", action="store_true", help="rewrite an existing council-local.json")
     init.set_defaults(run=cmd_init)

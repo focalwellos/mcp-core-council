@@ -123,7 +123,7 @@ def call_remote(tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     except HTTPError as error:
         if error.code == 401:
             raise RemoteError("%s: no valid access token (missing, expired or revoked). Request one with "
-                              "`mcp-core-council request`, then `mcp-core-council status`" % tool)
+                              "`mcp-core-council request`, then `mcp-core-council login <token>`" % tool)
         raise RemoteError("%s: HTTP %s %s" % (tool, error.code, error.read().decode("utf-8", "replace")[:300]))
     except URLError as error:
         raise RemoteError("%s: remote unavailable: %s" % (tool, error.reason))
