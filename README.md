@@ -93,3 +93,34 @@ Mỗi ghế là một lần gọi model bằng gói thuê bao của bạn, nên 
 | `MCP_AUTH_TOKEN` | Token dùng thay cho file access |
 | `MCP_COUNCIL_LOCAL_CONFIG` | Đường dẫn khác cho `council-local.json` |
 | `MCP_COUNCIL_ACCESS_FILE` | Đường dẫn khác cho `council-access.json` |
+
+### Nhiều tài khoản của cùng một hãng
+
+Phần này chỉ dành cho người có từ hai gói thuê bao Claude, hoặc hai gói ChatGPT/Codex, trở lên và muốn các ghế chạy trên những tài khoản khác nhau. Có một tài khoản cho mỗi hãng thì bạn bỏ qua phần này.
+
+Mỗi CLI giữ phần đăng nhập trong một thư mục: `~/.claude` cho Claude, `~/.codex` cho Codex. Tài khoản thứ hai cần một thư mục khác, và bạn đăng nhập vào thư mục đó một lần.
+
+macOS/Linux:
+
+```
+CLAUDE_CONFIG_DIR=~/.claude-work claude
+CODEX_HOME=~/.codex-work codex login
+```
+
+Windows (PowerShell):
+
+```
+$env:CLAUDE_CONFIG_DIR="$HOME\.claude-work"; claude
+$env:CODEX_HOME="$HOME\.codex-work"; codex login
+```
+
+Đăng nhập xong thì thoát. Sau đó thêm `config_dir` vào ghế dùng tài khoản đó. Mỗi ghế phải có `label` riêng:
+
+```json
+{"label": "claude:sonnet", "cli": "claude", "model": "sonnet"}
+{"label": "claude-work:sonnet", "cli": "claude", "model": "sonnet", "config_dir": "~/.claude-work"}
+```
+
+Ghế không có `config_dir` vẫn dùng tài khoản mặc định. Đường dẫn chỉ nằm trên máy bạn, không gửi lên server. `config_dir` dùng được cho ghế `claude` và `codex`. Antigravity (`agy`) chưa hỗ trợ.
+
+Nếu thư mục không tồn tại, ghế báo `unavailable` với thông báo `config_dir … not found`. Khi đó bạn đăng nhập lại như trên.

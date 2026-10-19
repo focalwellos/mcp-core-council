@@ -48,6 +48,10 @@ DEFAULT_TIMEOUT = 300
 DEFAULT_PARALLEL = 3
 LABEL_MAX = 64          # the remote refuses any string longer than this
 
+# A seat's optional config_dir: the login directory of a second account of the same CLI, set
+# for that seat's process only. agy keeps its login under HOME and has no such variable.
+CONFIG_DIR_ENV = {"claude": "CLAUDE_CONFIG_DIR", "codex": "CODEX_HOME"}
+
 # claude's system prompt: the seat answers as text and nothing else.
 CLAUDE_SYSTEM = ("You are one independent seat of a review council. You have no tools. "
                  "Answer the user's message as plain text only.")
@@ -91,6 +95,12 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
     for seat in seats:
         if not isinstance(seat, dict) or not all(isinstance(seat.get(k), str) and seat.get(k) for k in ("label", "cli", "model")):
             raise ValueError("%s: every seat needs string 'label', 'cli' and 'model'" % path)
+        if "config_dir" in seat:
+            if not isinstance(seat["config_dir"], str) or not seat["config_dir"].strip():
+                raise ValueError("%s: seat %s: 'config_dir' must be a non-empty string" % (path, seat["label"]))
+            if seat["cli"] not in CONFIG_DIR_ENV:
+                raise ValueError("%s: seat %s: 'config_dir' works for %s seats only"
+                                 % (path, seat["label"], " and ".join(sorted(CONFIG_DIR_ENV))))
     config.setdefault("max_parallel", DEFAULT_PARALLEL)
     config.setdefault("timeout_seconds", DEFAULT_TIMEOUT)
     return config
@@ -238,18 +248,19 @@ def _tokens(input_tokens=None, output_tokens=None, cached_tokens=None) -> Dict[s
     return {"input_tokens": _int(input_tokens), "output_tokens": _int(output_tokens), "cached_tokens": _int(cached_tokens)}
 
 
-def _run(argv: List[str], prompt: str, cwd: str, timeout: float):
+def _run(argv: List[str], prompt: str, cwd: str, timeout: float, env: Optional[Dict[str, str]] = None):
     """Run one CLI. Returns (returncode, stdout, stderr) or raises subprocess.TimeoutExpired."""
-    run = subprocess.run(argv, input=prompt, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd,
+    run = subprocess.run(argv, input=prompt, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, env=env,
                          timeout=timeout, text=True, encoding="utf-8", errors="replace")
     return run.returncode, run.stdout or "", run.stderr or ""
 
 
-def exec_claude(binary: str, model: str, prompt: str, cwd: str, timeout: float, scratch: str) -> Dict[str, Any]:
+def exec_claude(binary: str, model: str, prompt: str, cwd: str, timeout: float, scratch: str,
+                env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     argv = [binary, "-p", "--model", model, "--tools", "", "--system-prompt", CLAUDE_SYSTEM,
             "--setting-sources", "", "--disable-slash-commands", "--strict-mcp-config",
             "--exclude-dynamic-system-prompt-sections", "--output-format", "json", "--no-session-persistence"]
-    code, out, err = _run(argv, prompt, cwd, timeout)
+    code, out, err = _run(argv, prompt, cwd, timeout, env)
     answer, printed_model, tokens, is_error = "", "", _tokens(), False
     data = None
     try:
@@ -300,11 +311,12 @@ def _find_model(value: Any) -> str:
     return ""
 
 
-def exec_codex(binary: str, model: str, prompt: str, cwd: str, timeout: float, scratch: str) -> Dict[str, Any]:
+def exec_codex(binary: str, model: str, prompt: str, cwd: str, timeout: float, scratch: str,
+               env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     last = os.path.join(scratch, "last-message.txt")
     argv = [binary, "exec", "--skip-git-repo-check", "--sandbox", "read-only", "-C", cwd, "-m", model,
             "--json", "-o", last, "-"]
-    code, out, err = _run(argv, prompt, cwd, timeout)
+    code, out, err = _run(argv, prompt, cwd, timeout, env)
     usages: List[Dict[str, Any]] = []
     printed_model = ""
     for line in out.splitlines():
@@ -343,13 +355,14 @@ def agy_tokens(usage: Dict[str, Any]) -> Dict[str, Optional[int]]:
                    usage.get("cache_read_tokens"))
 
 
-def exec_agy(binary: str, model: str, prompt: str, cwd: str, timeout: float, scratch: str) -> Dict[str, Any]:
+def exec_agy(binary: str, model: str, prompt: str, cwd: str, timeout: float, scratch: str,
+             env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     # As runners/agy/relay-agy on the host: plan mode with agy's own sandbox. The prompt goes on
     # stdin as one stream-json user message.
     argv = [binary, "--input-format", "stream-json", "--output-format", "stream-json",
             "--mode", "plan", "--sandbox", "--model", model]
     message = json.dumps({"event": "user", "message": {"content": prompt}}) + "\n"
-    code, out, err = _run(argv, message, cwd, timeout)
+    code, out, err = _run(argv, message, cwd, timeout, env)
     usage: Dict[str, Any] = {}
     printed_model, response, text = "", None, []
     for line in out.splitlines():
@@ -396,10 +409,20 @@ def run_seat(seat: Dict[str, Any], prompt: str, timeout: float) -> Dict[str, Any
     if executor is None or binary is None:
         reason = "unknown cli %r" % cli if executor is None else "%s not found on PATH" % cli
         return dict(empty, status="unavailable", error=reason)
+    env = None
+    if seat.get("config_dir"):
+        variable = CONFIG_DIR_ENV.get(cli)
+        config_dir = os.path.expanduser(seat["config_dir"])
+        if variable is None:
+            return dict(empty, status="unavailable", error="config_dir does not work for %s seats" % cli)
+        if not os.path.isdir(config_dir):
+            return dict(empty, status="unavailable", error="config_dir %s not found: run %s once with %s set to it "
+                                                           "and log in" % (config_dir, cli, variable))
+        env = dict(os.environ, **{variable: config_dir})
     with tempfile.TemporaryDirectory(prefix="council-seat-") as cwd, \
             tempfile.TemporaryDirectory(prefix="council-out-") as scratch:
         try:
-            result = executor(binary, seat["model"], prompt, cwd, timeout, scratch)
+            result = executor(binary, seat["model"], prompt, cwd, timeout, scratch, env)
         except subprocess.TimeoutExpired:
             return dict(empty, status="unavailable", error="timeout after %ss" % timeout)
         except OSError as error:
