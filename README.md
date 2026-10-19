@@ -46,14 +46,19 @@ Lệnh này kiểm tra token với server, rồi lưu vào `~/.config/mcp-core/c
 COUNCIL init
 ```
 
-Lệnh này tìm `claude`, `codex` và `agy` trên máy, rồi ghi file `~/.config/mcp-core/council-local.json`. Nếu có `claude`, lệnh tạo sẵn hai ghế `claude:sonnet` và `claude:haiku`. Model của Codex và Antigravity tùy tài khoản, nên bạn tự thêm vào `"seats"`, mỗi model một dòng:
+Lệnh này tìm `claude`, `codex` và `agy` trên máy, rồi ghi file `~/.config/mcp-core/council-local.json`, mỗi CLI tìm thấy thì có ghế tương ứng:
+
+- `claude`: hai ghế `claude:sonnet` và `claude:haiku`.
+- `codex`: một ghế với model bạn đang dùng trong Codex, tức dòng `model = ...` trong `~/.codex/config.toml`.
+- `agy`: một ghế với model Gemini đầu tiên mà `agy models` liệt kê cho tài khoản Google của bạn.
+
+Vì vậy, trước khi chạy `init`, hãy mở `codex` và `agy` một lần để đăng nhập. Nếu `init` không tìm được model, nó in ra dòng mẫu để bạn tự thêm vào `"seats"`, ví dụ:
 
 ```json
-{"label": "codex:gpt-6.1-sol", "cli": "codex", "model": "gpt-6.1-sol"}
 {"label": "agy:gemini-3.8-flash-high", "cli": "agy", "model": "gemini-3.8-flash-high"}
 ```
 
-Lệnh `agy models` liệt kê các model mà tài khoản Google của bạn dùng được.
+Nếu file đã có sẵn, `init` không ghi đè. Nó in ra những ghế tìm thấy trên máy mà file còn thiếu. Bạn chép các dòng đó vào, hoặc chạy `COUNCIL init --force` để ghi lại file từ đầu.
 
 ## 4. Đăng ký với Claude Code (một lần, dùng cho mọi project)
 
