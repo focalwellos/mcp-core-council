@@ -39,6 +39,8 @@ PROTOCOL_VERSION = "2025-03-26"
 SERVER_NAME = "council-local"
 
 QUOTA_RE = re.compile(r"quota|rate limit|usage limit|RESOURCE_EXHAUSTED|429", re.IGNORECASE)
+# Statuses where the seat never ran, so another seat can take its role. `refused` ran and answered nothing.
+RETRY_STATUSES = ("unavailable", "no_quota")
 STRONG_HINTS = ("opus", "sonnet", "pro", "sol", "high")
 FAST_HINTS = ("haiku", "flash", "mini", "luna", "low")
 
@@ -227,6 +229,28 @@ def pick_seat(suggested: Optional[str], configured: List[Dict[str, Any]], tier: 
         if want and (_tier_of(seat["label"], want) or _tier_of(seat["model"], want)):
             return seat
     return configured[0]
+
+
+def pick_fallback(tier: Optional[str], configured: List[Dict[str, Any]], failed: set,
+                  taken: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """A seat to rerun a failed one on, never one whose label failed this round: first a seat
+    not taken yet, then one of a CLI no taken seat has, then one not on the account (CLI and
+    config_dir) of a failed seat, then one whose tier fits; ties in config order. None when
+    every configured seat failed."""
+    labels = {seat["label"] for seat in taken}
+    clis = {seat["cli"] for seat in taken}
+
+    def account(seat: Dict[str, Any]) -> tuple:
+        return (seat["cli"], seat.get("config_dir") or "")
+
+    failed_accounts = {account(seat) for seat in configured if seat["label"] in failed}
+
+    def rank(seat: Dict[str, Any]) -> tuple:
+        fits = not tier or _tier_of(seat["label"], tier) or _tier_of(seat["model"], tier)
+        return (seat["label"] in labels, seat["cli"] in clis, account(seat) in failed_accounts, not fits)
+
+    candidates = [seat for seat in configured if seat["label"] not in failed]
+    return min(candidates, key=rank) if candidates else None
 
 
 # --------------------------------------------------------------------------- executors
@@ -473,8 +497,39 @@ def council_run(arguments: Dict[str, Any], config: Optional[Dict[str, Any]] = No
     with ThreadPoolExecutor(max_workers=workers) as pool:
         outcomes = list(pool.map(lambda job: run_seat(job[1], job[2], timeout), jobs))
 
-    seats_out, report_seats = [], []
+        # A seat that could not run (no login, no quota, CLI missing) reruns on another configured
+        # seat, never on one that failed this round. Every pass adds the labels that failed in it,
+        # so the loop ends once every seat answered or every label failed.
+        failed: set = set()
+        fallback_from: Dict[int, Dict[str, Any]] = {}
+        while True:
+            failed |= {jobs[i][1]["label"] for i, o in enumerate(outcomes) if o["status"] in RETRY_STATUSES}
+            taken = [jobs[i][1] for i, o in enumerate(outcomes) if o["status"] not in RETRY_STATUSES]
+            retry = []
+            for i, outcome in enumerate(outcomes):
+                if outcome["status"] not in RETRY_STATUSES:
+                    continue
+                entry, seat, prompt = jobs[i]
+                substitute = pick_fallback(entry.get("tier"), configured, failed, taken)
+                if substitute is None:
+                    break
+                fallback_from.setdefault(i, dict({"label": seat["label"], "status": outcome["status"]},
+                                                 **({"error": outcome["error"]} if outcome.get("error") else {})))
+                jobs[i] = (entry, substitute, prompt)
+                taken.append(substitute)
+                retry.append(i)
+            if not retry:
+                break
+            for i, outcome in zip(retry, pool.map(lambda i: run_seat(jobs[i][1], jobs[i][2], timeout), retry)):
+                outcomes[i] = outcome
+
+    answered_on: Dict[str, List[str]] = {}
     for (entry, seat, _), outcome in zip(jobs, outcomes):
+        if outcome["status"] == "answered":
+            answered_on.setdefault(seat["label"], []).append(entry.get("seat_id"))
+
+    seats_out, report_seats = [], []
+    for i, ((entry, seat, _), outcome) in enumerate(zip(jobs, outcomes)):
         # The length bound is a target the prompt states, not a cut: the answer comes back whole
         # and over_bound says whether the seat kept to it.
         bound = int(entry.get("answer_max_chars") or DEFAULT_ANSWER_MAX_CHARS)
@@ -483,6 +538,12 @@ def council_run(arguments: Dict[str, Any], config: Optional[Dict[str, Any]] = No
                           "over_bound": len(outcome["answer"]) > bound, "tokens": outcome["tokens"]})
         if outcome.get("error"):
             seats_out[-1]["error"] = outcome["error"]
+        if i in fallback_from:
+            seats_out[-1]["fallback_from"] = fallback_from[i]
+            # The same seat answering two roles is one judge twice, not two independent ones.
+            others = [s for s in answered_on.get(seat["label"], []) if s != entry.get("seat_id")]
+            if outcome["status"] == "answered" and others:
+                seats_out[-1]["shares_seat_with"] = others
         # Metadata only: never the answer, the question or the context.
         report_seats.append(dict({"seat_id": str(entry.get("seat_id")), "model": str(outcome["model"])[:LABEL_MAX],
                                   "status": outcome["status"], "answer_chars": len(outcome["answer"])},

@@ -78,6 +78,12 @@ Nói với Claude Code, ví dụ:
 
 Mỗi ghế là một lần gọi model bằng gói thuê bao của bạn, nên sẽ tính vào quota của bạn. Mỗi token được tối đa 100 vòng mỗi ngày.
 
+Nếu một ghế không chạy được (chưa đăng nhập, hết quota, thiếu CLI, quá giờ), vai của nó được chạy lại trên một ghế khác trong file. Ưu tiên ghế chưa dùng trong vòng, rồi tới ghế của CLI khác. Kết quả của ghế đó có `fallback_from` ghi ghế ban đầu và lý do. Nếu chỉ còn một ghế chạy được, nhiều vai sẽ cùng do ghế đó trả lời, và `shares_seat_with` cho biết điều đó. Khi ấy câu trả lời không còn độc lập. Muốn có ghế dự phòng cùng hãng, hãy thêm một ghế nữa, ví dụ một model codex thứ hai:
+
+```json
+{"label": "codex:gpt-6.1-sol", "cli": "codex", "model": "gpt-6.1-sol"}
+```
+
 ## Cập nhật
 
 `uvx` lấy bản mới nhất trên nhánh `main`. Để buộc tải lại, thêm `--refresh` sau `uvx`.
