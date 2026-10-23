@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mcp-core-council"
-version = "0.6.5"
+version = "0.7.1"
 description = "MCP-core council client: runs review-council seats on your own Claude, Codex or Antigravity subscription"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -16,3 +16,6 @@ council-local = "mcp_core_council.council_local:main"
 
 [tool.setuptools]
 packages = ["mcp_core_council"]
+
+[tool.setuptools.package-data]
+mcp_core_council = ["council-seats.json"]

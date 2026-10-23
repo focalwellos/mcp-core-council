@@ -46,11 +46,11 @@ Lệnh này kiểm tra token với server, rồi lưu vào `~/.config/mcp-core/c
 COUNCIL init
 ```
 
-Lệnh này tìm `claude`, `codex` và `agy` trên máy, rồi ghi file `~/.config/mcp-core/council-local.json`, mỗi CLI tìm thấy thì có ghế tương ứng:
+Lệnh này tìm `claude`, `codex` và `agy` trên máy, rồi ghi file `~/.config/mcp-core/council-local.json`. Mỗi model mà tài khoản của bạn dùng được sẽ thành một ghế:
 
-- `claude`: hai ghế `claude:sonnet` và `claude:haiku`.
-- `codex`: một ghế với model bạn đang dùng trong Codex, tức dòng `model = ...` trong `~/.codex/config.toml`.
-- `agy`: một ghế với model Gemini đầu tiên mà `agy models` liệt kê cho tài khoản Google của bạn.
+- `claude`: bốn ghế `claude:fable`, `claude:opus`, `claude:sonnet`, `claude:haiku`. Đây là tên tắt, Claude Code tự hiểu là bản mới nhất.
+- `codex`: mọi model Codex liệt kê cho tài khoản của bạn (trong `~/.codex/models_cache.json`), ví dụ `codex:gpt-6.1-sol`, `codex:gpt-6-luna`.
+- `agy`: mọi model mà `agy models` liệt kê, kể cả model Claude và GPT‑OSS mà Antigravity cung cấp.
 
 Vì vậy, trước khi chạy `init`, hãy mở `codex` và `agy` một lần để đăng nhập. Nếu `init` không tìm được model, nó in ra dòng mẫu để bạn tự thêm vào `"seats"`, ví dụ:
 
@@ -58,7 +58,26 @@ Vì vậy, trước khi chạy `init`, hãy mở `codex` và `agy` một lần �
 {"label": "agy:gemini-3.8-flash-high", "cli": "agy", "model": "gemini-3.8-flash-high"}
 ```
 
-Nếu file đã có sẵn, `init` không ghi đè. Nó in ra những ghế tìm thấy trên máy mà file còn thiếu. Bạn chép các dòng đó vào, hoặc chạy `COUNCIL init --force` để ghi lại file từ đầu.
+`init` cũng in danh sách mọi CLI mà hội đồng biết, cả loại chưa chạy được (`gemini`, `muse` của Meta), kèm lệnh cài cho CLI bạn chưa có.
+
+Nếu file đã có sẵn, `init` không ghi đè. Nó in ra những ghế tìm thấy trên máy mà file còn thiếu. Chạy `COUNCIL seats --sync` để thêm chúng, hoặc `COUNCIL init --force` để ghi lại file từ đầu.
+
+### Ghế tự cập nhật
+
+Các hãng ra model mới, đổi tên và bỏ model cũ liên tục, nên ghế được đồng bộ tự động mỗi ngày một lần, ngay trước một vòng `council_run`. MCP-core giữ danh mục họ model, tầng (strong/fast) và các CLI đã biết. Mỗi CLI tự liệt kê model của tài khoản bạn. Việc đồng bộ chỉ gọi danh mục, không gửi câu hỏi, ngữ cảnh hay câu trả lời nào.
+
+- Ghế do đồng bộ tạo có `"auto": true`, kèm `family` và `tier`. Model mới được thêm, model bị bỏ thì ghế bị gỡ.
+- Ghế bạn tự viết (không có `auto`) không bao giờ bị sửa.
+- Đồng bộ chỉ dò các tài khoản mà ghế của bạn đang dùng (`config_dir`, `command`), cộng tài khoản mặc định của một CLI chưa có ghế nào. Ví dụ CLI mới cài.
+- Nếu một CLI tạm không liệt kê được (mất mạng, hết đăng nhập), ghế cũ của tài khoản đó được giữ nguyên.
+
+Xem ghế, họ, tầng và những ghế gửi lên lập plan: `COUNCIL seats`. Đồng bộ ngay: `COUNCIL seats --sync`.
+
+| Khoá trong `council-local.json` | Ý nghĩa |
+|---|---|
+| `sync_hours` | Số giờ giữa hai lần đồng bộ (mặc định 24) |
+| `auto_sync` | `false` để tắt đồng bộ tự động |
+| `exclude` | Danh sách regex trên `label`; ghế khớp không được tạo, ví dụ `["^claude:fable$"]` |
 
 ## 4. Đăng ký với Claude Code (một lần, dùng cho mọi project)
 
@@ -78,11 +97,7 @@ Nói với Claude Code, ví dụ:
 
 Mỗi ghế là một lần gọi model bằng gói thuê bao của bạn, nên sẽ tính vào quota của bạn. Mỗi token được tối đa 100 vòng mỗi ngày.
 
-Nếu một ghế không chạy được (chưa đăng nhập, hết quota, thiếu CLI, quá giờ), vai của nó được chạy lại trên một ghế khác trong file. Ưu tiên ghế chưa dùng trong vòng, rồi tới ghế của CLI khác. Kết quả của ghế đó có `fallback_from` ghi ghế ban đầu và lý do. Nếu chỉ còn một ghế chạy được, nhiều vai sẽ cùng do ghế đó trả lời, và `shares_seat_with` cho biết điều đó. Khi ấy câu trả lời không còn độc lập. Muốn có ghế dự phòng cùng hãng, hãy thêm một ghế nữa, ví dụ một model codex thứ hai:
-
-```json
-{"label": "codex:gpt-6.1-sol", "cli": "codex", "model": "gpt-6.1-sol"}
-```
+Nếu một ghế không chạy được (chưa đăng nhập, hết quota, thiếu CLI, quá giờ), vai của nó được chạy lại trên một ghế khác trong file. Ưu tiên ghế chưa dùng trong vòng, rồi tới ghế của CLI khác. Kết quả của ghế đó có `fallback_from` ghi ghế ban đầu và lý do. Nếu chỉ còn một ghế chạy được, hoặc máy chỉ cấu hình một ghế, nhiều vai sẽ cùng do ghế đó trả lời, và `shares_seat_with` cho biết điều đó. Kết quả còn có `independence`: `cross_family` là `false` và có `warning` khi mọi câu trả lời cùng một hãng model. Khi ấy câu trả lời không còn độc lập; cài và đăng nhập thêm CLI của hãng khác rồi chạy `mcp-core-council seats --sync`. Ghế tự cập nhật đã có mọi model của tài khoản, nên thường có sẵn ghế dự phòng cùng hãng.
 
 ## Cập nhật
 

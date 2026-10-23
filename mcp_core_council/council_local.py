@@ -25,14 +25,15 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 try:
-    from . import __version__, access
+    from . import __version__, access, seats
 except ImportError:  # executed as a plain script
     import access  # type: ignore
+    import seats  # type: ignore
     __version__ = "0.0.0"
 
 PROTOCOL_VERSION = "2025-03-26"
@@ -41,14 +42,13 @@ SERVER_NAME = "council-local"
 QUOTA_RE = re.compile(r"quota|rate limit|usage limit|RESOURCE_EXHAUSTED|429", re.IGNORECASE)
 # Statuses where the seat never ran, so another seat can take its role. `refused` ran and answered nothing.
 RETRY_STATUSES = ("unavailable", "no_quota")
-STRONG_HINTS = ("opus", "sonnet", "pro", "sol", "high")
-FAST_HINTS = ("haiku", "flash", "mini", "luna", "low")
 
 DEFAULT_CONTEXT_MAX_CHARS = 40000
 DEFAULT_ANSWER_MAX_CHARS = 4000
 DEFAULT_TIMEOUT = 300
 DEFAULT_PARALLEL = 3
 LABEL_MAX = 64          # the remote refuses any string longer than this
+PLAN_MODELS_MAX = 8     # labels council_plan takes
 
 # A seat's optional config_dir: the login directory of a second account of the same CLI, set
 # for that seat's process only. agy keeps its login under HOME and has no such variable.
@@ -91,10 +91,10 @@ def load_config(path: Optional[str] = None) -> Dict[str, Any]:
     path = path or config_path()
     with open(path, encoding="utf-8") as f:
         config = json.load(f)
-    seats = config.get("seats")
-    if not isinstance(seats, list) or not seats:
+    listed = config.get("seats")
+    if not isinstance(listed, list) or not listed:
         raise ValueError("%s: 'seats' must be a non-empty list" % path)
-    for seat in seats:
+    for seat in listed:
         if not isinstance(seat, dict) or not all(isinstance(seat.get(k), str) and seat.get(k) for k in ("label", "cli", "model")):
             raise ValueError("%s: every seat needs string 'label', 'cli' and 'model'" % path)
         if "config_dir" in seat:
@@ -212,33 +212,30 @@ def extract_claims(answer: str) -> List[str]:
 
 # --------------------------------------------------------------------------- seat choice
 
-def _tier_of(label: str, tier: str) -> bool:
-    hints = STRONG_HINTS if tier == "strong" else FAST_HINTS if tier == "fast" else ()
-    low = label.lower()
-    return any(h in low for h in hints)
-
-
-def pick_seat(suggested: Optional[str], configured: List[Dict[str, Any]], tier: Optional[str] = None) -> Dict[str, Any]:
-    """Exact label, else the first configured seat whose tier fits, else the first configured."""
+def pick_seat(suggested: Optional[str], configured: List[Dict[str, Any]], tier: Optional[str] = None,
+              catalog: Optional[Dict[str, Any]] = None, taken: Sequence[Dict[str, Any]] = ()) -> Dict[str, Any]:
+    """Exact label, else a configured seat whose tier fits, else any; among those, one of a model
+    family no seat in `taken` has comes first, then config order."""
+    catalog = catalog or seats.built_in_catalog()
     suggested = suggested or ""
     for seat in configured:
         if seat["label"] == suggested:
             return seat
     want = suggested if suggested in ("strong", "fast") else (tier or "")
-    for seat in configured:
-        if want and (_tier_of(seat["label"], want) or _tier_of(seat["model"], want)):
-            return seat
-    return configured[0]
+    used = {seats.family_of(seat, catalog) for seat in taken}
+    return min(configured, key=lambda seat: (bool(want) and seats.tier_of(seat, catalog) != want,
+                                             seats.family_of(seat, catalog) in used))
 
 
 def pick_fallback(tier: Optional[str], configured: List[Dict[str, Any]], failed: set,
-                  taken: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+                  taken: List[Dict[str, Any]], catalog: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """A seat to rerun a failed one on, never one whose label failed this round: first a seat
-    not taken yet, then one of a CLI no taken seat has, then one not on the account (CLI and
-    config_dir) of a failed seat, then one whose tier fits; ties in config order. None when
-    every configured seat failed."""
+    not taken yet, then one of a model family no taken seat has, then one not on the account
+    (CLI and config_dir) of a failed seat, then one whose tier fits; ties in config order.
+    None when every configured seat failed."""
+    catalog = catalog or seats.built_in_catalog()
     labels = {seat["label"] for seat in taken}
-    clis = {seat["cli"] for seat in taken}
+    families = {seats.family_of(seat, catalog) for seat in taken}
 
     def account(seat: Dict[str, Any]) -> tuple:
         return (seat["cli"], seat.get("config_dir") or "")
@@ -246,8 +243,9 @@ def pick_fallback(tier: Optional[str], configured: List[Dict[str, Any]], failed:
     failed_accounts = {account(seat) for seat in configured if seat["label"] in failed}
 
     def rank(seat: Dict[str, Any]) -> tuple:
-        fits = not tier or _tier_of(seat["label"], tier) or _tier_of(seat["model"], tier)
-        return (seat["label"] in labels, seat["cli"] in clis, account(seat) in failed_accounts, not fits)
+        fits = not tier or seats.tier_of(seat, catalog) == tier
+        return (seat["label"] in labels, seats.family_of(seat, catalog) in families,
+                account(seat) in failed_accounts, not fits)
 
     candidates = [seat for seat in configured if seat["label"] not in failed]
     return min(candidates, key=rank) if candidates else None
@@ -475,10 +473,17 @@ def council_run(arguments: Dict[str, Any], config: Optional[Dict[str, Any]] = No
         raise ValueError("'question' is required")
     if not isinstance(context, str):
         raise ValueError("'context' must be a string")
-    config = config or load_config()
+    sync = None
+    if config is None:
+        path = config_path()
+        sync = seats.sync_if_due(path, call_remote, tuple(EXECUTORS))   # never raises
+        config = load_config(path)
+        catalog = seats.cached_catalog(path)
+    else:
+        catalog = seats.built_in_catalog()
     configured = config["seats"]
 
-    plan_args: Dict[str, Any] = {"kind": kind, "models": [s["label"][:LABEL_MAX] for s in configured][:8]}
+    plan_args: Dict[str, Any] = {"kind": kind, "models": seats.plan_labels(configured, catalog, PLAN_MODELS_MAX)}
     if arguments.get("seats") is not None:
         plan_args["seats"] = int(arguments["seats"])
     plan = call_remote("council_plan", plan_args)
@@ -486,7 +491,8 @@ def council_run(arguments: Dict[str, Any], config: Optional[Dict[str, Any]] = No
 
     jobs = []
     for entry in planned:
-        seat = pick_seat(entry.get("suggested_model"), configured, entry.get("tier"))
+        seat = pick_seat(entry.get("suggested_model"), configured, entry.get("tier"), catalog,
+                         [job[1] for job in jobs])
         prompt = build_prompt(question, context, entry.get("prompt") or "",
                               int(entry.get("context_max_chars") or DEFAULT_CONTEXT_MAX_CHARS),
                               int(entry.get("answer_max_chars") or DEFAULT_ANSWER_MAX_CHARS))
@@ -510,7 +516,7 @@ def council_run(arguments: Dict[str, Any], config: Optional[Dict[str, Any]] = No
                 if outcome["status"] not in RETRY_STATUSES:
                     continue
                 entry, seat, prompt = jobs[i]
-                substitute = pick_fallback(entry.get("tier"), configured, failed, taken)
+                substitute = pick_fallback(entry.get("tier"), configured, failed, taken, catalog)
                 if substitute is None:
                     break
                 fallback_from.setdefault(i, dict({"label": seat["label"], "status": outcome["status"]},
@@ -540,10 +546,11 @@ def council_run(arguments: Dict[str, Any], config: Optional[Dict[str, Any]] = No
             seats_out[-1]["error"] = outcome["error"]
         if i in fallback_from:
             seats_out[-1]["fallback_from"] = fallback_from[i]
-            # The same seat answering two roles is one judge twice, not two independent ones.
-            others = [s for s in answered_on.get(seat["label"], []) if s != entry.get("seat_id")]
-            if outcome["status"] == "answered" and others:
-                seats_out[-1]["shares_seat_with"] = others
+        # The same seat answering two roles is one judge twice, not two independent ones: said
+        # whether the roles met on it from the start or a fallback put them there.
+        others = [s for s in answered_on.get(seat["label"], []) if s != entry.get("seat_id")]
+        if outcome["status"] == "answered" and others:
+            seats_out[-1]["shares_seat_with"] = others
         # Metadata only: never the answer, the question or the context.
         report_seats.append(dict({"seat_id": str(entry.get("seat_id")), "model": str(outcome["model"])[:LABEL_MAX],
                                   "status": outcome["status"], "answer_chars": len(outcome["answer"])},
@@ -551,6 +558,17 @@ def council_run(arguments: Dict[str, Any], config: Optional[Dict[str, Any]] = No
     result: Dict[str, Any] = {"round_id": plan.get("round_id"), "kind": plan.get("kind", kind),
                               "template_version": plan.get("template_version"),
                               "template_sha256": plan.get("template_sha256"), "seats": seats_out}
+    answered = [seat for (_, seat, _), outcome in zip(jobs, outcomes) if outcome["status"] == "answered"]
+    families = sorted({seats.family_of(seat, catalog) for seat in answered})
+    result["independence"] = {"answered_seats": len(answered), "families": families,
+                              "cross_family": len(families) >= 2}
+    if len(answered) >= 2 and len(families) < 2:
+        result["independence"]["warning"] = (
+            "every answer came from the %s family: this is one model's view in several roles, not an "
+            "independent council. Add a seat of another vendor (`mcp-core-council seats`)."
+            % (families[0] if families else "same"))
+    if sync is not None:
+        result["seat_sync"] = sync
     try:
         result["report"] = call_remote("council_report", {"round_id": plan.get("round_id"), "seats": report_seats})
     except RemoteError as error:

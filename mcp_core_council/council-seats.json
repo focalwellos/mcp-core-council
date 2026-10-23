@@ -1,0 +1,38 @@
+{
+  "_readme": [
+    "Seat catalog of the reference council, served by the council_seats tool (docs/REFERENCE-COUNCIL.md, Seats).",
+    "families and tiers: regexes on the bare model id (after the last : or /), first match wins.",
+    "clis: every CLI the council knows. status supported = the client has a runner; planned = listed so callers see it, no runner yet.",
+    "discover: how the client lists the models of one account: aliases (fixed names the CLI resolves to its latest model), models_cache (codex's cache file in its home), list_command (arguments that print id<TAB>name lines).",
+    "Live copy: ~/.config/mcp-core/council-seats.json or MCP_COUNCIL_SEATS_FILE; without one the server serves this file."
+  ],
+  "version": "2026-10-22",
+  "families": [
+    {"family": "anthropic", "vendor": "Anthropic", "match": "^(claude|fable|opus|sonnet|haiku)"},
+    {"family": "openai", "vendor": "OpenAI", "match": "^(gpt|o[1-9]|codex)"},
+    {"family": "google", "vendor": "Google", "match": "^(gemini|gemma)"},
+    {"family": "meta", "vendor": "Meta", "match": "^(muse|llama)"}
+  ],
+  "tiers": [
+    {"tier": "fast", "match": "haiku|(^|-)(mini|nano|lite|luna)(-|$)|flash(?!.*high)|-low$"}
+  ],
+  "default_tier": "strong",
+  "skip": "^(codex-auto-review|gpt-reserve)$",
+  "clis": {
+    "claude": {"family": "anthropic", "status": "supported", "login": "claude",
+               "install": "npm install -g @anthropic-ai/claude-code",
+               "discover": {"aliases": ["fable", "opus", "sonnet", "haiku"]}},
+    "codex": {"family": "openai", "status": "supported", "login": "codex login",
+              "install": "npm install -g @openai/codex",
+              "discover": {"models_cache": "models_cache.json"}},
+    "agy": {"family": "google", "status": "supported", "login": "agy",
+            "install": "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+            "discover": {"list_command": ["models"]}},
+    "gemini": {"family": "google", "status": "planned", "login": "gemini",
+               "install": "npm install -g @google/gemini-cli",
+               "note": "no runner in the client yet; agy covers Gemini models today"},
+    "muse": {"family": "meta", "status": "planned", "login": "muse",
+             "install": "curl -fsSL https://dev.meta.ai/install.sh | bash",
+             "note": "no runner in the client yet"}
+  }
+}
